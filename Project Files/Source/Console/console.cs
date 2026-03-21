@@ -532,6 +532,8 @@ namespace Thetis
         private bool _exitConsoleInDispose = true;
 
         private bool _use_additional_sas = true; // use additional spectrum analysers
+        private static bool _vstEnabled;
+        public static bool VstEnabled { get { return _vstEnabled; } }
 
         private bool m_bLogShutdown = false; // bool that is set via command line args to log the shutdown stages
 
@@ -711,6 +713,8 @@ namespace Thetis
 
             _use_additional_sas = !Common.HasArg(args, "-nospec"); // prevent the use of additional spec analysers           
             _touch_support = Common.HasArg(args, "-touch"); // configure touch support for mouse down/up/move, used primarily by containers, and ucMeter
+            _vstEnabled = Common.HasArg(args, "-vst") ||
+                !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("THETIS_VST_ENABLE"));
 
             string splash_screen_folder = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\OpenHPSDR\\SplashScreens";
             if (!Directory.Exists(splash_screen_folder))
@@ -849,6 +853,7 @@ namespace Thetis
             LogTool.AddLogEntry("Initialising radio...", "RADIO");
             Splash.SetStatus("Initializing Radio");				// Set progress point
             radio = new Radio(AppDataPath);					    // Initialize the Radio processor   INIT_SLOW
+            if (_vstEnabled)
             VstHost.LoadState(AppDataPath);
 
             specRX = new SpecRX();
@@ -955,6 +960,7 @@ namespace Thetis
 
             //            
             if (!IsSetupFormNull) SetupForm.SetupCMAsio(_portAudioIssue, Common.HasArg(args, "-cmasioconfig"));
+            vstChainsToolStripMenuItem.Visible = _vstEnabled;
 
             CpuUsage(); //[2.10.1.0] MW0LGE initial call to setup check marks in status bar as a minimum
 
@@ -1334,7 +1340,8 @@ namespace Thetis
                 s += "  -noinstancewarn    do not warn if other instances are running\n";
                 s += "  -nospec            do not use additional spectrum analysers from WDSP for filter item display\n";
                 s += "  -touch             provide touch support for containers to simulate mouse down/move/up\n";
-                s += "  -logshutdown       generate shutdown_log.txt when closing down\n\n";
+                s += "  -logshutdown       generate shutdown_log.txt when closing down\n";
+                s += "  -vst               enable VST plugin hosting (also enabled by THETIS_VST_ENABLE env var)\n\n";
 
                 s += "  -datapath:c:\\thetisdatafolder\\                  use this data folder for everything\n";
                 s += "  -datapath:c:\\thetisdatafolder\\ -autostart       as above, with autostart\n";
@@ -2712,6 +2719,7 @@ namespace Thetis
             NetworkIO.DestroyRNet();
 
             shutdownLogStringToPath("Before radio.Shutdown()");
+            if (_vstEnabled)
             VstHost.SaveState(AppDataPath);
             if (radio != null)
                 radio.Shutdown();
