@@ -2,7 +2,7 @@ See LICENSE and LICENSE-DUAL-LICENSING for licensing details.
 
 # This project is now active again for some big changes that are on the way related to remote op - 2nd July 2026
 
-Development is continuing for remote op access, with a full permission and state system, display codecs, opus support, remote web client, remote windows client. TCI will support WS and WSS connections. This is being implemented natively in Thetis and will not require 3rd party solutions.
+Development is continuing for remote op access, with a full permission and state system, display codecs, opus support, remote web client (MW0LGE), remote windows client (OE3IDE). TCI will support WS and WSS connections. This is being implemented natively in Thetis and will not require 3rd party solutions.
 
 ETA - when it is done, perhaps a few months from now.
 
