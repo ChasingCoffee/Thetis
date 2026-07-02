@@ -1,5 +1,14 @@
 See LICENSE and LICENSE-DUAL-LICENSING for licensing details.
 
+# This project is now active again for some big changes that are on the way related to remote op - 2nd July 2026
+
+Development is continusing for remote op access, with a full permission and state system, display codecs, opus support, remote web client, remote windows client. TCI will support WS and WSS connections. This is being implemented natively in Thetis and will not require 3rd party solutions.
+
+ETA - when it is done, perhaps a few months from now.
+
+73 MW0LGE - Richie.
+
+
 # This project is now archived - 2nd April 2026
 
 This fork of the original Thetis, which I started tinkering with in 2019, has now been archived. I will not be performing maintenance or adding features to it for the foreseeable future. Whilst I may return to it from time to time for minor fixes and/or if I develop something for personal use that I feel may also benefit others, active development has stopped.
