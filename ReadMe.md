@@ -8,6 +8,7 @@ ETA - when it is done, perhaps a few months from now.
 
 73 MW0LGE - Richie.
 
+<img width="1700" height="1072" alt="image" src="https://github.com/user-attachments/assets/ae8e576e-d266-4dc7-8d49-fdb8283cdca5" />
 
 # This project is now archived - 2nd April 2026
 
