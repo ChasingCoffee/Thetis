@@ -854,7 +854,7 @@ namespace Thetis
             Splash.SetStatus("Initializing Radio");				// Set progress point
             radio = new Radio(AppDataPath);					    // Initialize the Radio processor   INIT_SLOW
             if (_vstEnabled)
-            VstHost.LoadState(AppDataPath);
+                VstHost.LoadState(AppDataPath);
 
             specRX = new SpecRX();
             Display.specready = true;
@@ -2720,7 +2720,11 @@ namespace Thetis
 
             shutdownLogStringToPath("Before radio.Shutdown()");
             if (_vstEnabled)
-            VstHost.SaveState(AppDataPath);
+            {
+                shutdownLogStringToPath("Before VstHost.SaveState()");
+                VstHost.SaveState(AppDataPath);
+                shutdownLogStringToPath("After VstHost.SaveState()");
+            }
             if (radio != null)
                 radio.Shutdown();
 

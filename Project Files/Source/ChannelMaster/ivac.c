@@ -715,13 +715,13 @@ PORT void SetIVACcombine(int id, int combine)
 PORT void SetIVACApplyRxVst(int id, int apply)
 {
 	IVAC a = pvac[id];
-	a->vac_apply_rx_vst = apply ? 1 : 0;
+	a->vac_apply_rx_vst = apply;
 }
 
 PORT void SetIVACBypassTxVst(int id, int bypass)
 {
 	IVAC a = pvac[id];
-	a->vac_bypass_tx_vst = bypass ? 1 : 0;
+	a->vac_bypass_tx_vst = bypass;
 }
 
 

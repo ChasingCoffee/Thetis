@@ -319,4 +319,3 @@ void SetTXVAC (int txid, int txvac)
 {
 	_InterlockedExchange (&pip.xmtr[txid].txvac, txvac);
 }
-

@@ -285,7 +285,6 @@ void destroy_xmtr()
 void create_cmaster()
 {
 	int i, j;
-	int tx_stream;
 	for (i = 0; i < pcm->cmSTREAM; i++)
 	{
 		InitializeCriticalSectionAndSpinCount(&pcm->update[i], 2500);	// 'update' critical section
@@ -330,8 +329,7 @@ void create_cmaster()
 	if (pcm->VstInitialize)
 		pcm->VstInitialize();
 	configure_vst_rx_chain();
-	tx_stream = inid (1, 0);
-	configure_vst_tx_chain (tx_stream);
+	configure_vst_tx_chain (inid (1, 0));
 	pcm->panalalloc = (ANALYZERS)create_analyzer_alloc(32, 40);
 	// alloc_analyzer(1, 0, 262144);
 	// alloc_analyzer(1, 0, 16384);
