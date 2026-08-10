@@ -827,6 +827,11 @@
     <Compile Include="VstChainManagerForm.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="VstPluginArt.cs" />
+    <Compile Include="VstEditorCapture.cs" />
+    <Compile Include="VstRackView.cs">
+      <SubType>Component</SubType>
+    </Compile>
     <Compile Include="VstPluginPickerForm.cs">
       <SubType>Form</SubType>
     </Compile>

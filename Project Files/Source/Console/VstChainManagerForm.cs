@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Threading.Tasks;
@@ -10,6 +11,13 @@ namespace Thetis
     {
         private const int DeferredUiRefreshDelayMs = 200;
         private const int MaxPluginsPerChain = 16;
+        private const int EditorCaptureSettleMs = 1500;
+
+        private static readonly Color FormBack = Color.FromArgb(0x2B, 0x2B, 0x2B);
+        private static readonly Color PanelBack = Color.FromArgb(0x33, 0x33, 0x33);
+        private static readonly Color TextPrimary = Color.FromArgb(0xE0, 0xE0, 0xE0);
+        private static readonly Color TextSecondary = Color.FromArgb(0xA8, 0xA8, 0xA8);
+        private static readonly Color ButtonBack = Color.FromArgb(0x45, 0x45, 0x45);
 
         private sealed class StatusSnapshot
         {
@@ -30,13 +38,15 @@ namespace Thetis
         private sealed class ChainPage
         {
             public VstChainKind Kind;
-            public TabPage TabPage;
+            public Control Column;
             public CheckBox ChainBypassCheckBox;
             public NumericUpDown GainUpDown;
             public NumericUpDown LatencyFloorUpDown;
             public Label LatencyLabel;
             public Label ChainStatusLabel;
+            public Panel ViewHost;
             public ListView PluginListView;
+            public VstRackView RackView;
             public Button AddButton;
             public Button AddFileButton;
             public Button RemoveButton;
@@ -46,7 +56,6 @@ namespace Thetis
             public Button ToggleBypassButton;
             public Button OpenEditorButton;
             public Button RefreshButton;
-            public TextBox DetailTextBox;
             public VstChainInfo LastChainInfo;
             public bool RefreshInProgress;
             public bool RefreshPending;
@@ -56,10 +65,17 @@ namespace Thetis
 
         private readonly Label _summaryLabel;
         private readonly Label _hostStatusLabel;
-        private readonly TabControl _tabControl;
+        private readonly TableLayoutPanel _columnsPanel;
+        private readonly RadioButton _listViewRadio;
+        private readonly RadioButton _rackViewRadio;
+        private readonly CheckBox _showSnapshotsCheckBox;
+        private readonly Button _clearSnapshotsButton;
+        private readonly Label _detailLabel;
         private readonly ChainPage _rxPage;
         private readonly ChainPage _txPage;
         private readonly System.Windows.Forms.Timer _statusTimer;
+        private ChainPage _activePage;
+        private VstChainViewMode _viewMode;
         private bool _statusRefreshInProgress;
         private bool _updatingUi;
         private bool _openingEditor;
@@ -69,26 +85,34 @@ namespace Thetis
             Text = "VST Chains";
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             StartPosition = FormStartPosition.CenterParent;
-            MinimumSize = new Size(820, 420);
-            Size = new Size(1024, 560);
+            MinimumSize = new Size(1000, 520);
+            Size = new Size(1280, 760);
             ShowInTaskbar = false;
+            BackColor = FormBack;
+            ForeColor = TextPrimary;
+
+            _viewMode = VstHost.UiState.ChainViewMode;
 
             TableLayoutPanel rootPanel = new TableLayoutPanel();
             rootPanel.ColumnCount = 1;
-            rootPanel.RowCount = 2;
+            rootPanel.RowCount = 3;
             rootPanel.Dock = DockStyle.Fill;
             rootPanel.Padding = new Padding(8);
             rootPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             rootPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            rootPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
+            // ---- header ----------------------------------------------------
             TableLayoutPanel headerPanel = new TableLayoutPanel();
-            headerPanel.ColumnCount = 1;
+            headerPanel.ColumnCount = 2;
             headerPanel.RowCount = 2;
             headerPanel.AutoSize = true;
             headerPanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             headerPanel.Dock = DockStyle.Fill;
-            headerPanel.Margin = new Padding(0);
+            headerPanel.Margin = new Padding(0, 0, 0, 6);
             headerPanel.Padding = new Padding(0);
+            headerPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            headerPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             headerPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             headerPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
@@ -96,6 +120,7 @@ namespace Thetis
             _summaryLabel.AutoSize = true;
             _summaryLabel.Dock = DockStyle.Fill;
             _summaryLabel.Margin = new Padding(0);
+            _summaryLabel.ForeColor = TextSecondary;
 
             _hostStatusLabel = new Label();
             _hostStatusLabel.AutoSize = true;
@@ -103,19 +128,90 @@ namespace Thetis
             _hostStatusLabel.Margin = new Padding(0);
             _hostStatusLabel.Padding = new Padding(0, 2, 0, 2);
             _hostStatusLabel.Font = new Font(_hostStatusLabel.Font, FontStyle.Bold);
+            _hostStatusLabel.ForeColor = TextPrimary;
+
+            FlowLayoutPanel viewTogglePanel = new FlowLayoutPanel();
+            viewTogglePanel.AutoSize = true;
+            viewTogglePanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            viewTogglePanel.FlowDirection = FlowDirection.LeftToRight;
+            viewTogglePanel.WrapContents = false;
+            viewTogglePanel.Margin = new Padding(0);
+
+            _listViewRadio = CreateViewToggle("List");
+            _rackViewRadio = CreateViewToggle("Rack");
+            _listViewRadio.Checked = _viewMode == VstChainViewMode.List;
+            _rackViewRadio.Checked = _viewMode == VstChainViewMode.Rack;
+            _listViewRadio.CheckedChanged += delegate
+            {
+                if (_updatingUi || !_listViewRadio.Checked) return;
+                SetViewMode(VstChainViewMode.List);
+            };
+            _rackViewRadio.CheckedChanged += delegate
+            {
+                if (_updatingUi || !_rackViewRadio.Checked) return;
+                SetViewMode(VstChainViewMode.Rack);
+            };
+            _showSnapshotsCheckBox = new CheckBox();
+            _showSnapshotsCheckBox.AutoSize = true;
+            _showSnapshotsCheckBox.Margin = new Padding(0, 4, 10, 0);
+            _showSnapshotsCheckBox.Text = "Show Snapshots";
+            _showSnapshotsCheckBox.ForeColor = TextPrimary;
+            _showSnapshotsCheckBox.Checked = VstHost.UiState.ShowSnapshots;
+            _showSnapshotsCheckBox.CheckedChanged += delegate
+            {
+                if (_updatingUi) return;
+                SetShowSnapshots(_showSnapshotsCheckBox.Checked);
+            };
+
+            _clearSnapshotsButton = CreateButton("Clear Snapshots", 106);
+            // Wider right margin separates the snapshot controls from the
+            // view-mode pair that follows.
+            _clearSnapshotsButton.Margin = new Padding(0, 0, 16, 0);
+            _clearSnapshotsButton.Click += delegate { ClearCapturedSnapshots(); };
+
+            _rackViewRadio.Margin = new Padding(0, 0, 0, 0);
+
+            viewTogglePanel.Controls.Add(_showSnapshotsCheckBox);
+            viewTogglePanel.Controls.Add(_clearSnapshotsButton);
+            viewTogglePanel.Controls.Add(_listViewRadio);
+            viewTogglePanel.Controls.Add(_rackViewRadio);
 
             headerPanel.Controls.Add(_summaryLabel, 0, 0);
             headerPanel.Controls.Add(_hostStatusLabel, 0, 1);
+            headerPanel.Controls.Add(viewTogglePanel, 1, 0);
+            headerPanel.SetRowSpan(viewTogglePanel, 2);
 
-            _tabControl = new TabControl();
-            _tabControl.Dock = DockStyle.Fill;
-            _tabControl.Margin = new Padding(0);
+            // ---- side-by-side chain columns --------------------------------
+            _columnsPanel = new TableLayoutPanel();
+            _columnsPanel.ColumnCount = 2;
+            _columnsPanel.RowCount = 1;
+            _columnsPanel.Dock = DockStyle.Fill;
+            _columnsPanel.Margin = new Padding(0);
+            _columnsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            _columnsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            _columnsPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
-            _rxPage = CreateChainPage(VstChainKind.Rx, "RX Chain");
-            _txPage = CreateChainPage(VstChainKind.Tx, "TX Chain");
+            _rxPage = CreateChainPage(VstChainKind.Rx, "RX");
+            _txPage = CreateChainPage(VstChainKind.Tx, "TX");
 
-            _tabControl.TabPages.Add(_rxPage.TabPage);
-            _tabControl.TabPages.Add(_txPage.TabPage);
+            // Asymmetric margins put a visible gap between the two racks.
+            _rxPage.Column.Margin = new Padding(0, 0, 6, 0);
+            _txPage.Column.Margin = new Padding(6, 0, 0, 0);
+
+            _columnsPanel.Controls.Add(_rxPage.Column, 0, 0);
+            _columnsPanel.Controls.Add(_txPage.Column, 1, 0);
+
+            // ---- shared detail strip ---------------------------------------
+            _detailLabel = new Label();
+            _detailLabel.AutoSize = false;
+            _detailLabel.Dock = DockStyle.Fill;
+            _detailLabel.Height = 34;
+            _detailLabel.Margin = new Padding(0, 6, 0, 0);
+            _detailLabel.Padding = new Padding(8, 0, 8, 0);
+            _detailLabel.TextAlign = ContentAlignment.MiddleLeft;
+            _detailLabel.BackColor = PanelBack;
+            _detailLabel.ForeColor = TextSecondary;
+            _detailLabel.Text = "Select a plugin to view its load state and path.";
 
             _statusTimer = new System.Windows.Forms.Timer();
             _statusTimer.Interval = 500;
@@ -128,8 +224,11 @@ namespace Thetis
             };
 
             rootPanel.Controls.Add(headerPanel, 0, 0);
-            rootPanel.Controls.Add(_tabControl, 0, 1);
+            rootPanel.Controls.Add(_columnsPanel, 0, 1);
+            rootPanel.Controls.Add(_detailLabel, 0, 2);
             Controls.Add(rootPanel);
+
+            ApplyViewMode();
 
             Shown += delegate { _statusTimer.Start(); RefreshChains(); };
             Activated += delegate { RefreshChains(); };
@@ -166,34 +265,78 @@ namespace Thetis
             base.OnFormClosing(e);
         }
 
+        #region Construction
+
+        private static RadioButton CreateViewToggle(string text)
+        {
+            RadioButton button = new RadioButton();
+            button.Appearance = Appearance.Button;
+            button.AutoSize = false;
+            button.Size = new Size(60, 26);
+            button.Margin = new Padding(0, 0, 4, 0);
+            button.Text = text;
+            button.TextAlign = ContentAlignment.MiddleCenter;
+            button.FlatStyle = FlatStyle.Flat;
+            button.BackColor = ButtonBack;
+            button.ForeColor = TextPrimary;
+            button.FlatAppearance.BorderColor = Color.FromArgb(0x1A, 0x1A, 0x1A);
+            button.FlatAppearance.CheckedBackColor = Color.FromArgb(0x5E, 0x5E, 0x5E);
+            return button;
+        }
+
         private ChainPage CreateChainPage(VstChainKind kind, string title)
         {
             ChainPage page = new ChainPage();
-            TableLayoutPanel rootPanel = new TableLayoutPanel();
-            FlowLayoutPanel headerPanel = new FlowLayoutPanel();
-            TableLayoutPanel contentPanel = new TableLayoutPanel();
-            FlowLayoutPanel buttonPanel = new FlowLayoutPanel();
 
             page.Kind = kind;
-            page.TabPage = new TabPage(title);
-            page.TabPage.Padding = new Padding(6);
 
-            rootPanel.ColumnCount = 1;
-            rootPanel.RowCount = 3;
-            rootPanel.Dock = DockStyle.Fill;
-            rootPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            rootPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            rootPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 76F));
+            TableLayoutPanel column = new TableLayoutPanel();
+            column.ColumnCount = 1;
+            column.RowCount = 4;
+            column.Dock = DockStyle.Fill;
+            column.Padding = new Padding(0);
+            column.BackColor = FormBack;
+            column.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            column.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            column.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            column.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            page.Column = column;
 
+            // Row 0 — chain title + status
+            FlowLayoutPanel titlePanel = new FlowLayoutPanel();
+            titlePanel.AutoSize = true;
+            titlePanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            titlePanel.Dock = DockStyle.Fill;
+            titlePanel.WrapContents = false;
+            titlePanel.Margin = new Padding(0, 0, 0, 2);
+
+            Label titleLabel = new Label();
+            titleLabel.AutoSize = true;
+            titleLabel.Text = title;
+            titleLabel.Font = new Font(Font.FontFamily, 12f, FontStyle.Bold);
+            titleLabel.ForeColor = TextPrimary;
+            titleLabel.Margin = new Padding(0, 0, 10, 0);
+            titlePanel.Controls.Add(titleLabel);
+
+            page.ChainStatusLabel = new Label();
+            page.ChainStatusLabel.AutoSize = true;
+            page.ChainStatusLabel.Margin = new Padding(0, 8, 0, 0);
+            page.ChainStatusLabel.ForeColor = TextSecondary;
+            titlePanel.Controls.Add(page.ChainStatusLabel);
+
+            // Row 1 — chain controls
+            FlowLayoutPanel headerPanel = new FlowLayoutPanel();
             headerPanel.AutoSize = true;
+            headerPanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             headerPanel.Dock = DockStyle.Fill;
-            headerPanel.WrapContents = false;
-            headerPanel.Controls.Add(new Label { AutoSize = true, Margin = new Padding(0, 8, 6, 0), Text = "Chain Bypass:" });
+            headerPanel.WrapContents = true;
+            headerPanel.Margin = new Padding(0, 0, 0, 4);
 
             page.ChainBypassCheckBox = new CheckBox();
             page.ChainBypassCheckBox.AutoSize = true;
-            page.ChainBypassCheckBox.Margin = new Padding(0, 4, 16, 0);
+            page.ChainBypassCheckBox.Margin = new Padding(0, 5, 14, 0);
             page.ChainBypassCheckBox.Text = "Bypass";
+            page.ChainBypassCheckBox.ForeColor = TextPrimary;
             page.ChainBypassCheckBox.CheckedChanged += delegate
             {
                 if (_updatingUi) return;
@@ -202,7 +345,7 @@ namespace Thetis
             };
             headerPanel.Controls.Add(page.ChainBypassCheckBox);
 
-            headerPanel.Controls.Add(new Label { AutoSize = true, Margin = new Padding(0, 8, 6, 0), Text = "Gain:" });
+            headerPanel.Controls.Add(CreateFieldLabel("Gain:"));
 
             page.GainUpDown = new NumericUpDown();
             page.GainUpDown.DecimalPlaces = 2;
@@ -210,7 +353,11 @@ namespace Thetis
             page.GainUpDown.Maximum = 8M;
             page.GainUpDown.Minimum = 0M;
             page.GainUpDown.Value = 1.00M;
-            page.GainUpDown.Size = new Size(70, 24);
+            page.GainUpDown.Size = new Size(64, 24);
+            page.GainUpDown.Margin = new Padding(0, 2, 12, 0);
+            page.GainUpDown.BorderStyle = BorderStyle.FixedSingle;
+            page.GainUpDown.BackColor = PanelBack;
+            page.GainUpDown.ForeColor = TextPrimary;
             page.GainUpDown.ValueChanged += delegate
             {
                 if (_updatingUi) return;
@@ -219,7 +366,7 @@ namespace Thetis
             };
             headerPanel.Controls.Add(page.GainUpDown);
 
-            headerPanel.Controls.Add(new Label { AutoSize = true, Margin = new Padding(16, 8, 6, 0), Text = "Latency Floor:" });
+            headerPanel.Controls.Add(CreateFieldLabel("Floor:"));
 
             page.LatencyFloorUpDown = new NumericUpDown();
             page.LatencyFloorUpDown.DecimalPlaces = 0;
@@ -227,7 +374,11 @@ namespace Thetis
             page.LatencyFloorUpDown.Maximum = 64M;
             page.LatencyFloorUpDown.Minimum = 1M;
             page.LatencyFloorUpDown.Value = kind == VstChainKind.Rx ? 8M : 2M;
-            page.LatencyFloorUpDown.Size = new Size(50, 24);
+            page.LatencyFloorUpDown.Size = new Size(48, 24);
+            page.LatencyFloorUpDown.Margin = new Padding(0, 2, 8, 0);
+            page.LatencyFloorUpDown.BorderStyle = BorderStyle.FixedSingle;
+            page.LatencyFloorUpDown.BackColor = PanelBack;
+            page.LatencyFloorUpDown.ForeColor = TextPrimary;
             page.LatencyFloorUpDown.ValueChanged += delegate
             {
                 if (_updatingUi) return;
@@ -237,20 +388,16 @@ namespace Thetis
 
             page.LatencyLabel = new Label();
             page.LatencyLabel.AutoSize = true;
-            page.LatencyLabel.Margin = new Padding(4, 8, 0, 0);
+            page.LatencyLabel.Margin = new Padding(0, 6, 0, 0);
+            page.LatencyLabel.ForeColor = TextSecondary;
             page.LatencyLabel.Text = "";
             headerPanel.Controls.Add(page.LatencyLabel);
 
-            page.ChainStatusLabel = new Label();
-            page.ChainStatusLabel.AutoSize = true;
-            page.ChainStatusLabel.Margin = new Padding(16, 8, 0, 0);
-            headerPanel.Controls.Add(page.ChainStatusLabel);
-
-            contentPanel.ColumnCount = 2;
-            contentPanel.RowCount = 1;
-            contentPanel.Dock = DockStyle.Fill;
-            contentPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            contentPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 132F));
+            // Row 2 — the view host, holding both presentations
+            page.ViewHost = new Panel();
+            page.ViewHost.Dock = DockStyle.Fill;
+            page.ViewHost.Margin = new Padding(0);
+            page.ViewHost.BackColor = FormBack;
 
             page.PluginListView = new ListView();
             page.PluginListView.Dock = DockStyle.Fill;
@@ -259,53 +406,101 @@ namespace Thetis
             page.PluginListView.HideSelection = false;
             page.PluginListView.MultiSelect = false;
             page.PluginListView.View = View.Details;
-            page.PluginListView.Columns.Add("#", 36);
-            page.PluginListView.Columns.Add("Plugin", 180);
-            page.PluginListView.Columns.Add("Format", 60);
-            page.PluginListView.Columns.Add("Load", 110);
-            page.PluginListView.Columns.Add("Enabled", 70);
-            page.PluginListView.Columns.Add("Bypass", 70);
-            page.PluginListView.Columns.Add("Path", 360);
-            page.PluginListView.SelectedIndexChanged += delegate { UpdateSelection(page); };
-            page.PluginListView.DoubleClick += delegate { OpenSelectedPluginEditor(page); };
+            page.PluginListView.BackColor = Color.FromArgb(0x24, 0x24, 0x24);
+            page.PluginListView.ForeColor = TextPrimary;
+            page.PluginListView.BorderStyle = BorderStyle.FixedSingle;
+            page.PluginListView.Columns.Add("#", 30);
+            page.PluginListView.Columns.Add("Plugin", 150);
+            page.PluginListView.Columns.Add("Format", 55);
+            page.PluginListView.Columns.Add("Load", 90);
+            page.PluginListView.Columns.Add("On", 44);
+            page.PluginListView.Columns.Add("Byp", 44);
+            page.PluginListView.Columns.Add("Path", 300);
+            page.PluginListView.SelectedIndexChanged += delegate
+            {
+                if (_updatingUi) return;
+                _activePage = page;
+                UpdateSelection(page);
+            };
+            page.PluginListView.DoubleClick += delegate { OpenPluginEditorAt(page, GetSelectedIndex(page)); };
 
+            page.RackView = new VstRackView(kind);
+            page.RackView.Dock = DockStyle.Fill;
+            page.RackView.SelectionChanged += delegate
+            {
+                if (_updatingUi) return;
+                _activePage = page;
+                UpdateSelection(page);
+            };
+            page.RackView.AddRequested += delegate { AddPluginFromCatalog(page); };
+            page.RackView.RemoveRequested += delegate(object s, VstRackSlotEventArgs e)
+            {
+                RemovePluginAt(page, e.Index);
+            };
+            page.RackView.MoveRequested += delegate(object s, VstRackMoveEventArgs e)
+            {
+                MovePluginAt(page, e.Index, e.Delta);
+            };
+            page.RackView.EnabledToggleRequested += delegate(object s, VstRackSlotEventArgs e)
+            {
+                TogglePluginEnabledAt(page, e.Index);
+            };
+            page.RackView.BypassToggleRequested += delegate(object s, VstRackSlotEventArgs e)
+            {
+                TogglePluginBypassAt(page, e.Index);
+            };
+            page.RackView.EditorRequested += delegate(object s, VstRackSlotEventArgs e)
+            {
+                OpenPluginEditorAt(page, e.Index);
+            };
+
+            page.ViewHost.Controls.Add(page.PluginListView);
+            page.ViewHost.Controls.Add(page.RackView);
+
+            // Row 3 — compact button cluster, wraps on narrow columns
+            FlowLayoutPanel buttonPanel = new FlowLayoutPanel();
+            buttonPanel.AutoSize = true;
+            buttonPanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             buttonPanel.Dock = DockStyle.Fill;
-            buttonPanel.FlowDirection = FlowDirection.TopDown;
-            buttonPanel.WrapContents = false;
+            buttonPanel.FlowDirection = FlowDirection.LeftToRight;
+            buttonPanel.WrapContents = true;
+            buttonPanel.Margin = new Padding(0, 4, 0, 0);
 
-            page.AddButton = CreateButton("Add VST3...");
+            page.AddButton = CreateButton("+ VST3", 66);
             page.AddButton.Click += delegate { AddPluginFromCatalog(page); };
             buttonPanel.Controls.Add(page.AddButton);
 
-            page.AddFileButton = CreateButton("Add VST2...");
+            page.AddFileButton = CreateButton("+ VST2", 66);
             page.AddFileButton.Click += delegate { AddPluginFromVst2File(page); };
             buttonPanel.Controls.Add(page.AddFileButton);
 
-            page.RemoveButton = CreateButton("Remove");
-            page.RemoveButton.Click += delegate { RemoveSelectedPlugin(page); };
+            page.RemoveButton = CreateButton("Remove", 66);
+            page.RemoveButton.Click += delegate { RemovePluginAt(page, GetSelectedIndex(page)); };
             buttonPanel.Controls.Add(page.RemoveButton);
 
-            page.MoveUpButton = CreateButton("Move Up");
-            page.MoveUpButton.Click += delegate { MoveSelectedPlugin(page, -1); };
+            page.MoveUpButton = CreateButton("↑", 32);
+            page.MoveUpButton.Click += delegate { MovePluginAt(page, GetSelectedIndex(page), -1); };
             buttonPanel.Controls.Add(page.MoveUpButton);
 
-            page.MoveDownButton = CreateButton("Move Down");
-            page.MoveDownButton.Click += delegate { MoveSelectedPlugin(page, 1); };
+            page.MoveDownButton = CreateButton("↓", 32);
+            page.MoveDownButton.Click += delegate { MovePluginAt(page, GetSelectedIndex(page), 1); };
             buttonPanel.Controls.Add(page.MoveDownButton);
 
-            page.ToggleEnabledButton = CreateButton("Enable");
-            page.ToggleEnabledButton.Click += delegate { ToggleSelectedPluginEnabled(page); };
+            // Wide enough for the longest label each toggle can show
+            // ("Disable" / "Unbypass") so the text never wraps.
+            page.ToggleEnabledButton = CreateButton("Enable", 68);
+            page.ToggleEnabledButton.Click += delegate { TogglePluginEnabledAt(page, GetSelectedIndex(page)); };
             buttonPanel.Controls.Add(page.ToggleEnabledButton);
 
-            page.ToggleBypassButton = CreateButton("Bypass");
-            page.ToggleBypassButton.Click += delegate { ToggleSelectedPluginBypass(page); };
+            page.ToggleBypassButton = CreateButton("Bypass", 78);
+            page.ToggleBypassButton.Click += delegate { TogglePluginBypassAt(page, GetSelectedIndex(page)); };
             buttonPanel.Controls.Add(page.ToggleBypassButton);
 
-            page.OpenEditorButton = CreateButton("Open Editor");
-            page.OpenEditorButton.Click += delegate { OpenSelectedPluginEditor(page); };
+            page.OpenEditorButton = CreateButton("Editor", 56);
+            page.OpenEditorButton.Click += delegate { OpenPluginEditorAt(page, GetSelectedIndex(page)); };
             buttonPanel.Controls.Add(page.OpenEditorButton);
 
-            page.RefreshButton = CreateButton("Refresh");
+            page.RefreshButton = CreateButton("Refresh", 62);
             page.RefreshButton.Click += delegate { RefreshChainPageAsync(page); };
             buttonPanel.Controls.Add(page.RefreshButton);
 
@@ -317,33 +512,149 @@ namespace Thetis
                 RefreshChainPageAsync(page, page.PendingPreferredIndex);
             };
 
-            contentPanel.Controls.Add(page.PluginListView, 0, 0);
-            contentPanel.Controls.Add(buttonPanel, 1, 0);
+            column.Controls.Add(titlePanel, 0, 0);
+            column.Controls.Add(headerPanel, 0, 1);
+            column.Controls.Add(page.ViewHost, 0, 2);
+            column.Controls.Add(buttonPanel, 0, 3);
 
-            page.DetailTextBox = new TextBox();
-            page.DetailTextBox.Dock = DockStyle.Fill;
-            page.DetailTextBox.Multiline = true;
-            page.DetailTextBox.ReadOnly = true;
-            page.DetailTextBox.ScrollBars = ScrollBars.Vertical;
-            page.DetailTextBox.Text = "Select a plugin to view its load state and path.";
-
-            rootPanel.Controls.Add(headerPanel, 0, 0);
-            rootPanel.Controls.Add(contentPanel, 0, 1);
-            rootPanel.Controls.Add(page.DetailTextBox, 0, 2);
-
-            page.TabPage.Controls.Add(rootPanel);
             return page;
         }
 
-        private static Button CreateButton(string text)
+        private static Label CreateFieldLabel(string text)
         {
-            return new Button
+            return new Label
             {
-                AutoSize = false,
-                Size = new Size(108, 28),
-                Text = text
+                AutoSize = true,
+                Margin = new Padding(0, 6, 4, 0),
+                Text = text,
+                ForeColor = TextSecondary
             };
         }
+
+        private static Button CreateButton(string text, int width)
+        {
+            Button button = new Button();
+            button.AutoSize = false;
+            button.Size = new Size(width, 26);
+            button.Margin = new Padding(0, 0, 4, 4);
+            button.Text = text;
+            button.FlatStyle = FlatStyle.Flat;
+            button.BackColor = ButtonBack;
+            button.ForeColor = TextPrimary;
+            button.FlatAppearance.BorderColor = Color.FromArgb(0x1A, 0x1A, 0x1A);
+            // Labels swap at runtime (Enable/Disable, Bypass/Unbypass); keep a
+            // longer one on a single line rather than wrapping it.
+            button.AutoEllipsis = false;
+            button.TextImageRelation = TextImageRelation.Overlay;
+            return button;
+        }
+
+        #endregion
+
+        #region View mode
+
+        private void SetViewMode(VstChainViewMode mode)
+        {
+            if (_viewMode == mode)
+                return;
+
+            _viewMode = mode;
+            VstHost.UiState.ChainViewMode = mode;
+            VstHost.ScheduleUiStateSave();
+
+            ApplyViewMode();
+
+            // Re-seed whichever presentation just became visible.
+            RefreshChainPageAsync(_rxPage, GetSelectedIndex(_rxPage));
+            RefreshChainPageAsync(_txPage, GetSelectedIndex(_txPage));
+        }
+
+        private void SetShowSnapshots(bool show)
+        {
+            if (VstHost.UiState.ShowSnapshots == show)
+                return;
+
+            VstHost.UiState.ShowSnapshots = show;
+            VstHost.ScheduleUiStateSave();
+
+            // Free the decoded bitmaps while hidden; they reload on demand when
+            // switched back on.
+            if (!show)
+                VstPluginArt.Clear();
+
+            _rxPage.RackView.Invalidate(true);
+            _txPage.RackView.Invalidate(true);
+        }
+
+        /// <summary>
+        /// Deletes the editor screenshots Thetis captured. Vendor snapshots
+        /// shipped inside plugin bundles are untouched.
+        /// </summary>
+        private void ClearCapturedSnapshots()
+        {
+            DialogResult confirm = MessageBox.Show(
+                this,
+                "Delete all plugin snapshots captured by Thetis?\r\n\r\n" +
+                "Artwork supplied by the plugin vendor is not affected. " +
+                "Captured snapshots are recreated the next time you open a plugin's editor.",
+                "Clear Snapshots",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question);
+
+            if (confirm != DialogResult.Yes)
+                return;
+
+            // Release the cached bitmaps first so nothing holds the files open.
+            VstPluginArt.Clear();
+
+            int removed = VstHost.ClearCapturedArt();
+
+            _rxPage.RackView.Invalidate(true);
+            _txPage.RackView.Invalidate(true);
+
+            MessageBox.Show(
+                this,
+                removed == 1
+                    ? "Removed 1 captured snapshot."
+                    : string.Format("Removed {0} captured snapshots.", removed),
+                "Clear Snapshots",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+
+        private void ApplyViewMode()
+        {
+            bool rack = _viewMode == VstChainViewMode.Rack;
+
+            _updatingUi = true;
+            try
+            {
+                _listViewRadio.Checked = !rack;
+                _rackViewRadio.Checked = rack;
+
+                ApplyViewModeToPage(_rxPage, rack);
+                ApplyViewModeToPage(_txPage, rack);
+            }
+            finally
+            {
+                _updatingUi = false;
+            }
+        }
+
+        private static void ApplyViewModeToPage(ChainPage page, bool rack)
+        {
+            page.RackView.Visible = rack;
+            page.PluginListView.Visible = !rack;
+
+            if (rack)
+                page.RackView.BringToFront();
+            else
+                page.PluginListView.BringToFront();
+        }
+
+        #endregion
+
+        #region Status refresh
 
         private void UpdateHostStatus(VstHostState rxHostState, VstHostState txHostState)
         {
@@ -360,7 +671,7 @@ namespace Thetis
             _summaryLabel.Text = statusText;
             _hostStatusLabel.Text = modeText;
 
-            _tabControl.Enabled = VstHost.NativeAvailable;
+            _columnsPanel.Enabled = VstHost.NativeAvailable;
         }
 
         private void RefreshStatusOnlyAsync()
@@ -422,12 +733,11 @@ namespace Thetis
         private static void UpdateChainStatusLabel(ChainPage page, bool ready, int pluginCount, VstHostState hostState)
         {
             page.ChainStatusLabel.Text = string.Format(
-                "{0}: {1} | {2} ({3} plugin{4})",
-                VstHost.GetChainDisplayName(page.Kind),
+                "{0} · {1} · {2}/{3}",
                 ready ? "Ready" : "Not ready",
                 VstHost.GetHostStateDisplayName(hostState),
                 pluginCount,
-                pluginCount == 1 ? string.Empty : "s");
+                MaxPluginsPerChain);
         }
 
         private void UpdateLatencyLabel(ChainPage page, int currentBlocks, int floorBlocks, int sampleRate, int blockSize)
@@ -454,6 +764,10 @@ namespace Thetis
 
             return 0;
         }
+
+        #endregion
+
+        #region Chain refresh
 
         private void ApplyChainPageRefresh(ChainPage page, VstChainInfo chainInfo, int preferredIndex)
         {
@@ -497,16 +811,23 @@ namespace Thetis
                     item.SubItems.Add(string.Empty);
                     item.SubItems.Add(string.Empty);
                     item.SubItems.Add(string.Empty);
-                    item.ForeColor = SystemColors.GrayText;
+                    item.ForeColor = Color.FromArgb(0x6A, 0x6A, 0x6A);
                     page.PluginListView.Items.Add(item);
                 }
 
                 page.PluginListView.EndUpdate();
 
+                page.RackView.SetPlugins(chainInfo.Plugins, MaxPluginsPerChain);
+
                 if (selectedIndex >= 0 && selectedIndex < chainInfo.Plugins.Count)
                 {
                     page.PluginListView.Items[selectedIndex].Selected = true;
                     page.PluginListView.Items[selectedIndex].Focused = true;
+                    page.RackView.SelectedIndex = selectedIndex;
+                }
+                else
+                {
+                    page.RackView.SelectedIndex = -1;
                 }
             }
             finally
@@ -573,6 +894,8 @@ namespace Thetis
             }, TaskScheduler.Default);
         }
 
+        #endregion
+
         protected override void Dispose(bool disposing)
         {
             if (disposing)
@@ -584,6 +907,7 @@ namespace Thetis
                 }
                 DisposeChainPageTimer(_rxPage);
                 DisposeChainPageTimer(_txPage);
+                VstPluginArt.Clear();
             }
 
             base.Dispose(disposing);
@@ -598,6 +922,8 @@ namespace Thetis
             page.DeferredRefreshTimer.Dispose();
             page.DeferredRefreshTimer = null;
         }
+
+        #region Selection
 
         private void UpdateSelection(ChainPage page)
         {
@@ -620,21 +946,70 @@ namespace Thetis
             {
                 page.ToggleEnabledButton.Text = "Enable";
                 page.ToggleBypassButton.Text = "Bypass";
-                page.DetailTextBox.Text = "Select a plugin to view its load state and path.";
+
+                if (_activePage == page)
+                    _detailLabel.Text = "Select a plugin to view its load state and path.";
+
                 return;
             }
 
             page.ToggleEnabledButton.Text = plugin.Enabled ? "Disable" : "Enable";
             page.ToggleBypassButton.Text = plugin.Bypass ? "Unbypass" : "Bypass";
-            page.DetailTextBox.Text = string.Format(
-                "{0}\r\nFormat: {1}\r\nLoad state: {2}\r\nEnabled: {3}\r\nBypass: {4}\r\nPath: {5}",
-                VstHost.GetPluginDisplayName(plugin),
-                VstHost.GetPluginFormatDisplayName(plugin.Format),
-                VstHost.GetLoadStateDisplayName(plugin.LoadState),
-                plugin.Enabled ? "Yes" : "No",
-                plugin.Bypass ? "Yes" : "No",
-                plugin.Path ?? string.Empty);
+
+            if (_activePage == page)
+            {
+                _detailLabel.Text = string.Format(
+                    "{0}  ·  {1}  ·  {2}  ·  {3}  ·  {4}  ·  {5}",
+                    VstHost.GetChainDisplayName(page.Kind),
+                    VstHost.GetPluginDisplayName(plugin),
+                    VstHost.GetPluginFormatDisplayName(plugin.Format),
+                    VstHost.GetLoadStateDisplayName(plugin.LoadState),
+                    plugin.Enabled ? (plugin.Bypass ? "bypassed" : "enabled") : "disabled",
+                    plugin.Path ?? string.Empty);
+            }
         }
+
+        private int GetSelectedIndex(ChainPage page)
+        {
+            if (_viewMode == VstChainViewMode.Rack)
+                return page.RackView.SelectedIndex;
+
+            if (page.PluginListView.SelectedIndices.Count == 0)
+                return -1;
+
+            return page.PluginListView.SelectedIndices[0];
+        }
+
+        private VstPluginState GetSelectedPlugin(ChainPage page)
+        {
+            int selectedIndex = GetSelectedIndex(page);
+
+            if (selectedIndex < 0)
+                return null;
+
+            if (page.LastChainInfo == null || page.LastChainInfo.Plugins == null)
+                return null;
+
+            if (selectedIndex >= page.LastChainInfo.Plugins.Count)
+                return null;
+
+            return page.LastChainInfo.Plugins[selectedIndex];
+        }
+
+        private VstPluginState GetPluginAt(ChainPage page, int index)
+        {
+            if (index < 0 || page.LastChainInfo == null || page.LastChainInfo.Plugins == null)
+                return null;
+
+            if (index >= page.LastChainInfo.Plugins.Count)
+                return null;
+
+            return page.LastChainInfo.Plugins[index];
+        }
+
+        #endregion
+
+        #region Chain operations
 
         private void AddPluginFromCatalog(ChainPage page)
         {
@@ -653,6 +1028,7 @@ namespace Thetis
         private void AddPlugin(ChainPage page, string pluginPath)
         {
             VstOperationResult result = VstHost.AddPlugin(page.Kind, pluginPath);
+            _activePage = page;
             RefreshChainPageAsync(page, result.PluginIndex);
 
             if (!result.Success || result.HasWarning)
@@ -705,78 +1081,79 @@ namespace Thetis
             return false;
         }
 
-        private void RemoveSelectedPlugin(ChainPage page)
+        private void RemovePluginAt(ChainPage page, int index)
         {
-            int selectedIndex = GetSelectedIndex(page);
-            if (selectedIndex < 0)
+            if (index < 0)
                 return;
 
-            if (!VstHost.RemovePlugin(page.Kind, selectedIndex))
+            if (!VstHost.RemovePlugin(page.Kind, index))
             {
                 MessageBox.Show(this, "The native host could not remove the selected plugin.", "VST Chains", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
-            RefreshChainPageAsync(page, Math.Max(0, selectedIndex - 1));
+            _activePage = page;
+            RefreshChainPageAsync(page, Math.Max(0, index - 1));
         }
 
-        private void MoveSelectedPlugin(ChainPage page, int delta)
+        private void MovePluginAt(ChainPage page, int index, int delta)
         {
-            int selectedIndex = GetSelectedIndex(page);
-            int targetIndex = selectedIndex + delta;
+            int targetIndex = index + delta;
 
-            if (selectedIndex < 0)
+            if (index < 0)
+                return;
+            if (targetIndex < 0 || targetIndex >= GetDisplayedPluginCount(page))
                 return;
 
-            if (!VstHost.MovePlugin(page.Kind, selectedIndex, targetIndex))
+            if (!VstHost.MovePlugin(page.Kind, index, targetIndex))
             {
                 MessageBox.Show(this, "The native host could not reorder the selected plugin.", "VST Chains", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
+            _activePage = page;
             RefreshChainPageAsync(page, targetIndex);
         }
 
-        private void ToggleSelectedPluginEnabled(ChainPage page)
+        private void TogglePluginEnabledAt(ChainPage page, int index)
         {
-            int selectedIndex = GetSelectedIndex(page);
-            VstPluginState plugin = GetSelectedPlugin(page);
+            VstPluginState plugin = GetPluginAt(page, index);
 
-            if (selectedIndex < 0 || plugin == null)
+            if (plugin == null)
                 return;
 
-            if (!VstHost.SetPluginEnabled(page.Kind, selectedIndex, !plugin.Enabled))
+            if (!VstHost.SetPluginEnabled(page.Kind, index, !plugin.Enabled))
             {
                 MessageBox.Show(this, "The native host could not update the plugin enabled state.", "VST Chains", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
-            QueueChainPageRefresh(page, selectedIndex);
+            _activePage = page;
+            QueueChainPageRefresh(page, index);
         }
 
-        private void ToggleSelectedPluginBypass(ChainPage page)
+        private void TogglePluginBypassAt(ChainPage page, int index)
         {
-            int selectedIndex = GetSelectedIndex(page);
-            VstPluginState plugin = GetSelectedPlugin(page);
+            VstPluginState plugin = GetPluginAt(page, index);
 
-            if (selectedIndex < 0 || plugin == null)
+            if (plugin == null)
                 return;
 
-            if (!VstHost.SetPluginBypass(page.Kind, selectedIndex, !plugin.Bypass))
+            if (!VstHost.SetPluginBypass(page.Kind, index, !plugin.Bypass))
             {
                 MessageBox.Show(this, "The native host could not update the plugin bypass state.", "VST Chains", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
-            QueueChainPageRefresh(page, selectedIndex);
+            _activePage = page;
+            QueueChainPageRefresh(page, index);
         }
 
-        private void OpenSelectedPluginEditor(ChainPage page)
+        private void OpenPluginEditorAt(ChainPage page, int index)
         {
-            int selectedIndex = GetSelectedIndex(page);
-            VstPluginState plugin = GetSelectedPlugin(page);
+            VstPluginState plugin = GetPluginAt(page, index);
 
-            if (selectedIndex < 0 || plugin == null)
+            if (plugin == null)
                 return;
 
             if (plugin.LoadState != VstPluginLoadState.Active)
@@ -787,11 +1164,12 @@ namespace Thetis
             if (_openingEditor)
                 return;
 
+            _activePage = page;
             _openingEditor = true;
             page.OpenEditorButton.Enabled = false;
             UseWaitCursor = true;
 
-            Task.Run(() => VstHost.OpenPluginEditorWindow(page.Kind, selectedIndex)).ContinueWith(task =>
+            Task.Run(() => VstHost.OpenPluginEditorWindow(page.Kind, index)).ContinueWith(task =>
             {
                 if (IsDisposed || Disposing)
                     return;
@@ -805,10 +1183,60 @@ namespace Thetis
                     if (task.IsFaulted || !task.Result)
                     {
                         MessageBox.Show(this, "The plugin editor could not be opened.", "VST Chains", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        return;
                     }
+
+                    CaptureEditorArtworkAsync(page, plugin);
                 });
             }, TaskScheduler.Default);
         }
+
+        /// <summary>
+        /// Screenshots the editor the host just opened, so plugins without
+        /// vendor snapshot artwork still get a face in the rack. Best effort —
+        /// failures leave the drawn placeholder in place.
+        /// </summary>
+        private void CaptureEditorArtworkAsync(ChainPage page, VstPluginState plugin)
+        {
+            if (plugin == null || string.IsNullOrWhiteSpace(plugin.Path))
+                return;
+
+            string pluginPath = plugin.Path;
+
+            Task.Run(() =>
+            {
+                // Give the plugin time to finish painting; editors draw
+                // asynchronously and an immediate grab catches a half-built UI.
+                System.Threading.Thread.Sleep(EditorCaptureSettleMs);
+                return VstEditorCapture.TryCaptureEditor(plugin);
+            }).ContinueWith(captureTask =>
+            {
+                if (IsDisposed || Disposing || !IsHandleCreated)
+                    return;
+
+                if (captureTask.IsFaulted || string.IsNullOrEmpty(captureTask.Result))
+                    return;
+
+                VstPluginArt.Invalidate(pluginPath);
+
+                try
+                {
+                    BeginInvoke((MethodInvoker)delegate
+                    {
+                        if (!IsDisposed && !Disposing)
+                            page.RackView.Invalidate(true);
+                    });
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+                catch (InvalidOperationException)
+                {
+                }
+            }, TaskScheduler.Default);
+        }
+
+        #endregion
 
         private static decimal ClampDecimal(double value, decimal minimum, decimal maximum)
         {
@@ -816,23 +1244,6 @@ namespace Thetis
             if (decimalValue < minimum) return minimum;
             if (decimalValue > maximum) return maximum;
             return decimalValue;
-        }
-
-        private static int GetSelectedIndex(ChainPage page)
-        {
-            if (page.PluginListView.SelectedIndices.Count == 0)
-                return -1;
-
-            return page.PluginListView.SelectedIndices[0];
-        }
-
-        private static VstPluginState GetSelectedPlugin(ChainPage page)
-        {
-            int selectedIndex = GetSelectedIndex(page);
-            if (selectedIndex < 0)
-                return null;
-
-            return page.PluginListView.Items[selectedIndex].Tag as VstPluginState;
         }
     }
 }
