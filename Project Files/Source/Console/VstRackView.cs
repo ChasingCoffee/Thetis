@@ -90,6 +90,7 @@ namespace Thetis
         private int _selectedIndex = -1;
         private int _pluginCount;
         private int _maxSlots;
+        private bool _layingOut;
 
         public event EventHandler SelectionChanged;
         public event EventHandler<VstRackSlotEventArgs> RemoveRequested;
@@ -204,20 +205,49 @@ namespace Thetis
 
         private void LayoutUnits()
         {
-            int y = ScaleBy(6);
-            int margin = ScaleBy(6);
-            int width = ClientSize.Width - (margin * 2) - SystemInformation.VerticalScrollBarWidth;
+            // Setting AutoScrollMinSize below can change the client size, which
+            // re-enters here; one pass is enough.
+            if (_layingOut)
+                return;
 
-            if (width < ScaleBy(120))
-                width = ScaleBy(120);
+            _layingOut = true;
 
-            for (int i = 0; i < _units.Count; i++)
+            try
             {
-                VstRackUnit unit = _units[i];
-                int height = unit.GetPreferredHeight();
+                int margin = ScaleBy(6);
+                int gap = ScaleBy(6);
+                int width = ClientSize.Width - (margin * 2) - SystemInformation.VerticalScrollBarWidth;
 
-                unit.SetBounds(margin, y, width, height);
-                y += height + ScaleBy(6);
+                // Child positions in a scrolling panel are client coordinates,
+                // already shifted by the scroll offset. Laying out with raw
+                // values while scrolled pushes units downward and grows the
+                // scroll range upward, leaving empty space above the first unit.
+                int scrollOffset = AutoScrollPosition.Y;
+                int y = margin;
+
+                if (width < ScaleBy(120))
+                    width = ScaleBy(120);
+
+                for (int i = 0; i < _units.Count; i++)
+                {
+                    VstRackUnit unit = _units[i];
+                    int height = unit.GetPreferredHeight();
+
+                    unit.SetBounds(margin, y + scrollOffset, width, height);
+                    y += height + gap;
+                }
+
+                // State the content extent explicitly rather than letting it be
+                // inferred from scrolled child bounds, so the scroll range
+                // always matches the units exactly.
+                Size contentSize = new Size(0, y);
+
+                if (AutoScrollMinSize != contentSize)
+                    AutoScrollMinSize = contentSize;
+            }
+            finally
+            {
+                _layingOut = false;
             }
         }
 
