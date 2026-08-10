@@ -397,6 +397,31 @@ namespace Thetis
             get { return pnlContainer; }
         }
 
+        /// <summary>
+        /// Lets content hosted in <see cref="DisplayContainer"/> report mouse
+        /// movement over itself.
+        ///
+        /// The move bar and resize grabber are only revealed by mouse movement
+        /// over pnlContainer. That works when the content is drawn onto the
+        /// panel, as the meter renderers do, because the panel still receives
+        /// the mouse. Content that is a child control instead consumes those
+        /// events itself, so without this the container would never show its
+        /// chrome and could not be moved or resized.
+        /// </summary>
+        public void NotifyContentMouseMove()
+        {
+            pnlContainer_MouseMove(this, new MouseEventArgs(MouseButtons.None, 0, 0, 0, 0));
+        }
+
+        /// <summary>
+        /// Counterpart to <see cref="NotifyContentMouseMove"/>, so the chrome
+        /// hides again once the pointer leaves hosted child content.
+        /// </summary>
+        public void NotifyContentMouseLeave()
+        {
+            pnlContainer_MouseLeave(this, EventArgs.Empty);
+        }
+
         private void pbGrab_MouseDown(object sender, MouseEventArgs e)
         {
             _clientPos = Parent.PointToClient(Cursor.Position);

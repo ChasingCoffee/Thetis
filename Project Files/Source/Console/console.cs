@@ -961,6 +961,7 @@ namespace Thetis
             //            
             if (!IsSetupFormNull) SetupForm.SetupCMAsio(_portAudioIssue, Common.HasArg(args, "-cmasioconfig"));
             vstChainsToolStripMenuItem.Visible = _vstEnabled;
+            setupVstRackContainerMenu();
 
             CpuUsage(); //[2.10.1.0] MW0LGE initial call to setup check marks in status bar as a minimum
 
@@ -48492,6 +48493,54 @@ namespace Thetis
                 VstChainManagerForm.Focus();
                 SetFocusMaster(false);
             }
+        }
+
+        private ToolStripMenuItem _vstRxRackContainerMenuItem;
+        private ToolStripMenuItem _vstTxRackContainerMenuItem;
+
+        /// <summary>
+        /// Adds the RX/TX rack container toggles under the Setup menu. Built in
+        /// code rather than the designer so the generated file stays untouched,
+        /// and only when VST hosting is enabled.
+        /// </summary>
+        private void setupVstRackContainerMenu()
+        {
+            if (!_vstEnabled || _vstRxRackContainerMenuItem != null) return;
+
+            _vstRxRackContainerMenuItem = new ToolStripMenuItem("RX VST Rack");
+            _vstRxRackContainerMenuItem.CheckOnClick = false;
+            _vstRxRackContainerMenuItem.Click += delegate
+            {
+                VstRackContainerManager.ToggleContainer(VstChainKind.Rx);
+                updateVstRackContainerMenu();
+            };
+
+            _vstTxRackContainerMenuItem = new ToolStripMenuItem("TX VST Rack");
+            _vstTxRackContainerMenuItem.CheckOnClick = false;
+            _vstTxRackContainerMenuItem.Click += delegate
+            {
+                VstRackContainerManager.ToggleContainer(VstChainKind.Tx);
+                updateVstRackContainerMenu();
+            };
+
+            int insertAt = setupToolStripMenuItem.DropDownItems.IndexOf(vstChainsToolStripMenuItem) + 1;
+
+            if (insertAt <= 0 || insertAt > setupToolStripMenuItem.DropDownItems.Count)
+                insertAt = setupToolStripMenuItem.DropDownItems.Count;
+
+            setupToolStripMenuItem.DropDownItems.Insert(insertAt, _vstTxRackContainerMenuItem);
+            setupToolStripMenuItem.DropDownItems.Insert(insertAt, _vstRxRackContainerMenuItem);
+
+            VstRackContainerManager.Initialize(this);
+            updateVstRackContainerMenu();
+        }
+
+        private void updateVstRackContainerMenu()
+        {
+            if (_vstRxRackContainerMenuItem == null) return;
+
+            _vstRxRackContainerMenuItem.Checked = VstRackContainerManager.IsVisible(VstChainKind.Rx);
+            _vstTxRackContainerMenuItem.Checked = VstRackContainerManager.IsVisible(VstChainKind.Tx);
         }
 
         public void ToggleRxTxAnt()

@@ -45,6 +45,7 @@ namespace Thetis
             public Label LatencyLabel;
             public Label ChainStatusLabel;
             public Panel ViewHost;
+            public FlowLayoutPanel ButtonPanel;
             public ListView PluginListView;
             public VstRackView RackView;
             public Button AddButton;
@@ -66,6 +67,7 @@ namespace Thetis
         private readonly Label _summaryLabel;
         private readonly Label _hostStatusLabel;
         private readonly TableLayoutPanel _columnsPanel;
+        private TableLayoutPanel _rootPanel;
         private readonly RadioButton _listViewRadio;
         private readonly RadioButton _rackViewRadio;
         private readonly CheckBox _showSnapshotsCheckBox;
@@ -94,6 +96,7 @@ namespace Thetis
             _viewMode = VstHost.UiState.ChainViewMode;
 
             TableLayoutPanel rootPanel = new TableLayoutPanel();
+            _rootPanel = rootPanel;
             rootPanel.ColumnCount = 1;
             rootPanel.RowCount = 3;
             rootPanel.Dock = DockStyle.Fill;
@@ -244,6 +247,74 @@ namespace Thetis
                     _statusTimer.Stop();
                 }
             };
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+
+            // Run after load so DPI scaling has already been applied to the
+            // buttons; measuring them in the constructor would size the form
+            // from unscaled widths.
+            ApplyExactButtonRowWidth();
+        }
+
+        /// <summary>
+        /// Sizes the form so each chain column is exactly wide enough for its
+        /// button row on a single line, with no slack. Also becomes the minimum
+        /// width, so the buttons can never be made to wrap.
+        /// </summary>
+        private void ApplyExactButtonRowWidth()
+        {
+            int columnWidth = Math.Max(
+                GetButtonRowWidth(_rxPage.ButtonPanel),
+                GetButtonRowWidth(_txPage.ButtonPanel));
+
+            if (columnWidth <= 0)
+                return;
+
+            int chrome = Width - ClientSize.Width;
+            int gaps = _rxPage.Column.Margin.Horizontal
+                     + _txPage.Column.Margin.Horizontal
+                     + _rootPanel.Padding.Horizontal;
+
+            // The two columns split the remaining space 50/50, so an odd width
+            // leaves one of them a pixel short and wraps its row. Keep the
+            // column area even.
+            int columnArea = columnWidth * 2;
+
+            if (columnArea % 2 != 0)
+                columnArea++;
+
+            int target = columnArea + gaps + chrome;
+
+            MinimumSize = new Size(target, MinimumSize.Height);
+
+            if (Width != target)
+                Width = target;
+        }
+
+        private static int GetButtonRowWidth(FlowLayoutPanel panel)
+        {
+            if (panel == null || panel.Controls.Count == 0)
+                return 0;
+
+            // Ask the panel itself how wide one unwrapped row is. A hand-rolled
+            // sum is easy to get wrong: the layout counts every control's full
+            // margin when deciding whether it fits, including the trailing one
+            // on the last button, so trimming that margin wraps the row.
+            int width = panel.GetPreferredSize(new Size(int.MaxValue, 1)).Width;
+
+            if (width > 0)
+                return width;
+
+            for (int i = 0; i < panel.Controls.Count; i++)
+            {
+                Control control = panel.Controls[i];
+                width += control.Width + control.Margin.Horizontal;
+            }
+
+            return width + panel.Padding.Horizontal;
         }
 
         public void RefreshChains()
@@ -465,6 +536,7 @@ namespace Thetis
             buttonPanel.FlowDirection = FlowDirection.LeftToRight;
             buttonPanel.WrapContents = true;
             buttonPanel.Margin = new Padding(0, 4, 0, 0);
+            page.ButtonPanel = buttonPanel;
 
             page.AddButton = CreateButton("+ VST3", 66);
             page.AddButton.Click += delegate { AddPluginFromCatalog(page); };

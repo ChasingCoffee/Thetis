@@ -247,6 +247,17 @@ namespace Thetis
         /// <summary>Plugin paths whose rack unit is collapsed.</summary>
         public List<string> CollapsedPlugins { get; set; }
 
+        public bool RxContainerVisible { get; set; }
+        public bool TxContainerVisible { get; set; }
+
+        /// <summary>
+        /// Container geometry in ucMeter's own pipe-delimited format. Stored
+        /// here rather than in Thetis's per-profile settings because the VST
+        /// chains these containers show are global, not per profile.
+        /// </summary>
+        public string RxContainerData { get; set; }
+        public string TxContainerData { get; set; }
+
         public VstUiState()
         {
             ChainViewMode = VstChainViewMode.Rack;

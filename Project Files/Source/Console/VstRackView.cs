@@ -91,6 +91,18 @@ namespace Thetis
         private int _pluginCount;
         private int _maxSlots;
         private bool _layingOut;
+        private bool _compact;
+
+        /// <summary>
+        /// Raised for mouse movement anywhere over the rack, including over its
+        /// units. A host that needs to know the pointer is over its content —
+        /// such as a ucMeter container, whose move/resize chrome is driven by
+        /// mouse movement over its own panel — can subscribe to this.
+        /// </summary>
+        public event EventHandler ContentMouseMove;
+
+        /// <summary>Raised when the pointer leaves the rack entirely.</summary>
+        public event EventHandler ContentMouseLeave;
 
         public event EventHandler SelectionChanged;
         public event EventHandler<VstRackSlotEventArgs> RemoveRequested;
@@ -122,6 +134,28 @@ namespace Thetis
         public int PluginCount
         {
             get { return _pluginCount; }
+        }
+
+        /// <summary>
+        /// Renders every unit as a single short row with no artwork. Intended
+        /// for the on-screen rack containers, which are too small for full
+        /// units.
+        /// </summary>
+        public bool Compact
+        {
+            get { return _compact; }
+            set
+            {
+                if (_compact == value)
+                    return;
+
+                _compact = value;
+
+                for (int i = 0; i < _units.Count; i++)
+                    _units[i].Compact = value;
+
+                LayoutUnits();
+            }
         }
 
         /// <summary>
@@ -170,7 +204,12 @@ namespace Thetis
                 while (_units.Count < desiredUnits)
                 {
                     VstRackUnit unit = new VstRackUnit(_toolTip);
+                    unit.Compact = _compact;
                     unit.Clicked += OnUnitClicked;
+                    // Units cover the rack, so their mouse activity has to be
+                    // relayed for a host to see it as movement over the content.
+                    unit.MouseMove += OnUnitMouseMove;
+                    unit.MouseLeave += OnUnitMouseLeave;
                     _units.Add(unit);
                     Controls.Add(unit);
                 }
@@ -181,6 +220,8 @@ namespace Thetis
                     _units.RemoveAt(_units.Count - 1);
                     Controls.Remove(unit);
                     unit.Clicked -= OnUnitClicked;
+                    unit.MouseMove -= OnUnitMouseMove;
+                    unit.MouseLeave -= OnUnitMouseLeave;
                     unit.Dispose();
                 }
 
@@ -255,6 +296,57 @@ namespace Thetis
         {
             base.OnClientSizeChanged(e);
             LayoutUnits();
+        }
+
+        private const int WM_NCMOUSEMOVE = 0x00A0;
+        private const int WM_NCMOUSELEAVE = 0x02A2;
+
+        protected override void WndProc(ref Message m)
+        {
+            base.WndProc(ref m);
+
+            // The scrollbar is non-client area and so never raises MouseMove.
+            // Without relaying this a host cannot tell the pointer is over the
+            // rack's right or bottom edge — which is exactly where a container
+            // keeps its resize grabber.
+            if (m.Msg == WM_NCMOUSEMOVE)
+                RaiseContentMouseMove();
+            else if (m.Msg == WM_NCMOUSELEAVE)
+                RaiseContentMouseLeave();
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            RaiseContentMouseMove();
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            RaiseContentMouseLeave();
+        }
+
+        private void OnUnitMouseMove(object sender, MouseEventArgs e)
+        {
+            RaiseContentMouseMove();
+        }
+
+        private void OnUnitMouseLeave(object sender, EventArgs e)
+        {
+            RaiseContentMouseLeave();
+        }
+
+        private void RaiseContentMouseMove()
+        {
+            if (ContentMouseMove != null)
+                ContentMouseMove(this, EventArgs.Empty);
+        }
+
+        private void RaiseContentMouseLeave()
+        {
+            if (ContentMouseLeave != null)
+                ContentMouseLeave(this, EventArgs.Empty);
         }
 
         private void ApplySelectionToUnits()
@@ -371,6 +463,11 @@ namespace Thetis
         private const int IconSizeDip = 16;
         private const int IconGapDip = 5;
 
+        // Compact rows exist for the on-screen containers, which are far too
+        // small to show full units with artwork.
+        private const int CompactHeightDip = 26;
+        private const int CompactAddBayHeightDip = 22;
+
         private readonly ToolTip _toolTip;
 
         private int _index = -1;
@@ -378,6 +475,7 @@ namespace Thetis
         private bool _selected;
         private bool _collapsed;
         private bool _isAddBay;
+        private bool _compact;
         private VstRackHitRegion _hoverRegion = VstRackHitRegion.None;
 
         private Rectangle _enableRect;
@@ -412,8 +510,28 @@ namespace Thetis
             return (int)Math.Round(value * DpiScale);
         }
 
+        /// <summary>
+        /// Renders as a single short row: no artwork, no collapse chevron, and
+        /// no body. Used by the on-screen rack containers.
+        /// </summary>
+        public bool Compact
+        {
+            get { return _compact; }
+            set
+            {
+                if (_compact == value)
+                    return;
+
+                _compact = value;
+                Invalidate();
+            }
+        }
+
         public int GetPreferredHeight()
         {
+            if (_compact)
+                return ScaleBy(_isAddBay ? CompactAddBayHeightDip : CompactHeightDip);
+
             if (_isAddBay)
                 return ScaleBy(AddBayHeightDip);
 
@@ -487,6 +605,12 @@ namespace Thetis
 
         private void RecomputeLayout()
         {
+            if (_compact)
+            {
+                RecomputeCompactLayout();
+                return;
+            }
+
             int gutter = ScaleBy(GutterWidthDip);
             int headerHeight = ScaleBy(HeaderHeightDip);
             int icon = ScaleBy(IconSizeDip);
@@ -512,6 +636,29 @@ namespace Thetis
             _bodyRect = _collapsed
                 ? Rectangle.Empty
                 : new Rectangle(gutter, headerHeight, Math.Max(0, Width - gutter), Math.Max(0, Height - headerHeight));
+        }
+
+        private void RecomputeCompactLayout()
+        {
+            int gutter = ScaleBy(20);
+            int icon = ScaleBy(13);
+            int gap = ScaleBy(3);
+            int pad = ScaleBy(3);
+            int iconY = Math.Max(0, (Height - icon) / 2);
+
+            _headerRect = new Rectangle(gutter, 0, Math.Max(0, Width - gutter), Height);
+            _bodyRect = Rectangle.Empty;
+            _collapseRect = Rectangle.Empty;
+
+            int x = gutter + pad;
+
+            _enableRect = new Rectangle(x, iconY, icon, icon);
+            x += icon + gap;
+            _editorRect = new Rectangle(x, iconY, icon, icon);
+            x += icon + gap;
+            _bypassRect = new Rectangle(x, iconY, icon, icon);
+            x += icon + gap;
+            _removeRect = new Rectangle(x, iconY, icon, icon);
         }
 
         /// <summary>
@@ -637,12 +784,113 @@ namespace Thetis
                 return;
             }
 
+            if (_compact)
+            {
+                PaintCompact(g);
+                return;
+            }
+
             PaintGutter(g);
             PaintFaceplate(g);
             PaintHeaderContent(g);
 
             if (!_collapsed)
                 PaintBody(g);
+
+            PaintBorder(g);
+        }
+
+        /// <summary>
+        /// Single-row rendering for the on-screen containers: slot number, icon
+        /// cluster, name, format badge and load LED. No artwork or body.
+        /// </summary>
+        private void PaintCompact(Graphics g)
+        {
+            int gutter = ScaleBy(20);
+            Rectangle face = new Rectangle(gutter, 0,
+                Math.Max(1, Width - gutter - 1), Math.Max(1, Height - 1));
+
+            using (SolidBrush fill = new SolidBrush(VstRackTheme.Gutter))
+                g.FillRectangle(fill, new Rectangle(0, 0, gutter, Height));
+
+            Color top = VstRackTheme.FaceTop;
+            Color bottom = VstRackTheme.FaceBottom;
+
+            if (IsDimmed())
+            {
+                top = Dim(top);
+                bottom = Dim(bottom);
+            }
+
+            if (_selected)
+            {
+                top = Lighten(top, 0.10f);
+                bottom = Lighten(bottom, 0.10f);
+            }
+
+            using (GraphicsPath path = CreateRoundedPath(face, ScaleBy(3)))
+            using (LinearGradientBrush brush = new LinearGradientBrush(
+                new Rectangle(face.X, face.Y, face.Width, Math.Max(1, face.Height)),
+                top, bottom, LinearGradientMode.Vertical))
+            {
+                g.FillPath(brush, path);
+            }
+
+            using (SolidBrush text = new SolidBrush(VstRackTheme.TextSecondary))
+            using (Font font = new Font(Font.FontFamily, 7f, FontStyle.Bold))
+            using (StringFormat sf = CreateCenteredFormat())
+            {
+                g.DrawString((_index + 1).ToString(), font, text,
+                    new Rectangle(0, 0, gutter, Height), sf);
+            }
+
+            PaintIcon(g, _enableRect, VstRackHitRegion.Enable);
+            PaintIcon(g, _editorRect, VstRackHitRegion.Editor);
+            PaintIcon(g, _bypassRect, VstRackHitRegion.Bypass);
+            PaintIcon(g, _removeRect, VstRackHitRegion.Remove);
+
+            // LED and format badge sit hard right; the name takes what is left.
+            int ledSize = ScaleBy(6);
+            Rectangle ledRect = new Rectangle(Width - ScaleBy(10), (Height - ledSize) / 2, ledSize, ledSize);
+
+            using (SolidBrush brush = new SolidBrush(GetLoadStateColor()))
+                g.FillEllipse(brush, ledRect);
+
+            int badgeRight = ledRect.Left - ScaleBy(4);
+            int nameRight = badgeRight;
+
+            if (_plugin != null)
+            {
+                string format = VstHost.GetPluginFormatDisplayName(_plugin.Format);
+
+                using (Font font = new Font(Font.FontFamily, 6.5f, FontStyle.Bold))
+                using (SolidBrush text = new SolidBrush(VstRackTheme.TextSecondary))
+                using (StringFormat sf = CreateCenteredFormat())
+                {
+                    SizeF size = g.MeasureString(format, font);
+                    Rectangle badge = new Rectangle(
+                        badgeRight - (int)size.Width - ScaleBy(2), (Height - ScaleBy(11)) / 2,
+                        (int)size.Width + ScaleBy(2), ScaleBy(11));
+
+                    g.DrawString(format, font, text, badge, sf);
+                    nameRight = badge.Left - ScaleBy(4);
+                }
+            }
+
+            int nameLeft = _removeRect.Right + ScaleBy(6);
+
+            if (nameRight > nameLeft)
+            {
+                using (SolidBrush brush = new SolidBrush(IsDimmed() ? VstRackTheme.TextSecondary : VstRackTheme.TextPrimary))
+                using (Font font = new Font(Font.FontFamily, 8f, FontStyle.Regular))
+                using (StringFormat sf = CreateTrimmedFormat())
+                {
+                    sf.LineAlignment = StringAlignment.Center;
+                    g.DrawString(
+                        _plugin != null ? VstHost.GetPluginDisplayName(_plugin) : string.Empty,
+                        font, brush, new Rectangle(nameLeft, 0, nameRight - nameLeft, Height), sf);
+                }
+            }
 
             PaintBorder(g);
         }
